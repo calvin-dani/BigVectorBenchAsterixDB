@@ -1,0 +1,13 @@
+float:
+  any:
+    - base_args: ["@metric"]
+      constructor: AsterixDBVTree
+      disabled: false
+      docker_tag: bigvectorbench-asterixdb
+      module: bigvectorbench.algorithms.asterixdb
+      name: asterixdb-vtree
+      run_groups:
+        default:
+          arg_groups: [{}]
+          # args: {}
+          query_args: [[0.75], [1]]
