@@ -936,6 +936,30 @@ BVB_DATASETS.update(
     }
 )
 
+
+def amazon_r1_dataset(out_fn: str, dataset_name: str) -> None:
+    """
+    amazon_r1_dataset: Copies an Amazon R1 size (random sample with dense ids, filter rule R1, matching
+    ground truth) from the VTree bench bucket; it is not on the Hugging Face hub
+    """
+    import boto3  # pylint: disable=import-outside-toplevel
+
+    bucket = os.environ.get("BVB_AMAZON_BUCKET", "asterixdb-vtree-bench-180329584557")
+    key = f"input/amazon5f/bvb/{dataset_name}.hdf5"
+    print(f"downloading s3://{bucket}/{key} -> {out_fn}...")
+    region = os.environ.get("BVB_AMAZON_REGION", "us-west-2")
+    boto3.client("s3", region_name=region).download_file(bucket, key, out_fn)
+
+
+BVB_DATASETS.update(
+    {
+        f"amazon-384-euclidean-5filter-r1-{size}": lambda out_fn, s=size: amazon_r1_dataset(
+            out_fn, f"amazon-384-euclidean-5filter-r1-{s}"
+        )
+        for size in ["s8", "s4", "s2", "full"]
+    }
+)
+
 def artificial_dataset(out_fn: str, dataset_name: str) -> None:
     """
     bvb_dataset: Downloads a dataset from the BigVectorBench repository on Hugging Face Datasets Hub

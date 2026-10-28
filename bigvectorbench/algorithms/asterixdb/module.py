@@ -59,6 +59,9 @@ class AsterixDBVTree(BaseANN):
         BVB_S3_ENDPOINT: S3 endpoint as seen from this process (default http://localhost:8001, s3mock)
         BVB_S3_ASTERIX_ENDPOINT: the same S3 as seen from the AsterixDB nodes (default http://iceberg-storage:9090)
         BVB_S3_BUCKET / BVB_S3_PREFIX: where the parts go (default bvb / bvb-load/)
+        BVB_DATASET: dataset name in the BVB dataverse (default items); its index is <name>_vec
+        BVB_PRELOADED: set to 1 when the dataset and its VTree index were already loaded and built on the
+            cluster; nothing is dropped, loaded or indexed, only the row count and the index are checked
     """
 
     DATAVERSE = "BVB"
@@ -82,6 +85,9 @@ class AsterixDBVTree(BaseANN):
         self._load_definition = os.environ.get("BVB_LOAD_DEFINITION", "")
         self._load_include = os.environ.get("BVB_LOAD_INCLUDE", "*.json")
         self._load_endpoint = os.environ.get("BVB_LOAD_ENDPOINT", "")
+        self.DATASET = os.environ.get("BVB_DATASET", self.DATASET)
+        self.INDEX = f"{self.DATASET}_vec"
+        self._preloaded = os.environ.get("BVB_PRELOADED", "") == "1"
         if self._load_definition and not self._load_container:
             raise ValueError("[AsterixDB] BVB_LOAD_DEFINITION needs BVB_LOAD_CONTAINER")
         self._s3 = boto3.client(
@@ -164,6 +170,9 @@ class AsterixDBVTree(BaseANN):
             if label_types is not None and any(t != "int32" for t in label_types):
                 raise ValueError(f"[AsterixDB] only int32 labels are supported, got {label_types}")
             self._label_pattern = re.compile(r"\b(" + "|".join(map(re.escape, self.label_names)) + r")\b")
+        if self._preloaded:
+            self._check_preloaded(embeddings.shape[0])
+            return
         fields = ["id: bigint"]
         fields += [f"{n}: int" for n in self.label_names]
         fields.append("embedding: [double]")
@@ -238,7 +247,22 @@ class AsterixDBVTree(BaseANN):
         self._run(f"USE {self.DATAVERSE}; ANALYZE DATASET {self.DATASET};")
         self.num_entities = n
 
+    def _check_preloaded(self, n: int) -> None:
+        (count,) = self._run(f"USE {self.DATAVERSE}; SELECT VALUE COUNT(*) FROM {self.DATASET};")
+        if count != n:
+            raise RuntimeError(f"[AsterixDB] {self.DATASET} holds {count:,} rows but train_vec has {n:,}")
+        found = self._run(
+            "SELECT VALUE i.IndexStructure FROM Metadata.`Index` i "
+            f'WHERE i.DataverseName = "{self.DATAVERSE}" AND i.DatasetName = "{self.DATASET}" '
+            f'AND i.IndexName = "{self.INDEX}";'
+        )
+        if found != ["VTREE"]:
+            raise RuntimeError(f"[AsterixDB] expected VTREE index {self.INDEX} on {self.DATASET}, found {found}")
+        self.num_entities = n
+
     def create_index(self) -> None:
+        if self._preloaded:
+            return
         with_params = {"dimension": self._dimension, "similarity": self._similarity, **self._index_param}
         # Filters on fields outside INCLUDE make the planner skip VTree for a full scan (checked with EXPLAIN on
         # 371db29), so every label the filters use is included.
